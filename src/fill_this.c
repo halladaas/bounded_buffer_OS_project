@@ -105,12 +105,40 @@ static double timespec_diff_ms(struct timespec start, struct timespec end) {
 /* ═══════════════════════════════════════════════════════════
  *  BUFFER LIFECYCLE
  * ═══════════════════════════════════════════════════════════ */
+/* Initializes the buffer with given capacity per priority queue */
 static int buffer_init(buffer_t *buf, int capacity) {
-    
+
+    /* Allocate queues */
+    buf->capacity = capacity;
+    buf->u_head = buf->u_tail = buf->u_count = 0;
+    buf->n_head = buf->n_tail = buf->n_count = 0;
+    buf->urgent_slots = malloc(sizeof(item_t) * capacity);
+    buf->normal_slots = malloc(sizeof(item_t) * capacity);
+    if (!buf->urgent_slots || !buf->normal_slots) {
+        fprintf(stderr, "Error allocating buffer queues: %s\n", strerror(errno));
+        return -1;
+    }
+
+    /*init semaphores + mutex*/
+    pthread_mutex_init(&buf->mutex, NULL);
+    sem_init(&buf->empty, 0, capacity * 2); /* total free slots across both queues */
+    sem_init(&buf->full, 0, 0);
+
+    return 0;
 }
 
+/* Destroys the buffer, freeing resources */
 static void buffer_destroy(buffer_t *buf) {
-    
+    buf->capacity = 0;
+    buf->u_head = buf->u_tail = buf->u_count = 0;
+    buf->n_head = buf->n_tail = buf->n_count = 0;
+    free(buf->urgent_slots);
+    free(buf->normal_slots);
+
+    /* Destroy semaphores + mutex */
+    pthread_mutex_destroy(&buf->mutex);
+    sem_destroy(&buf->empty);
+    sem_destroy(&buf->full);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -124,6 +152,25 @@ static void buffer_destroy(buffer_t *buf) {
  */
 static void buffer_insert(buffer_t *buf, item_t item) {
 
+    /*blocks if full*/
+    sem_wait(&buf->empty);
+    pthread_mutex_lock(&buf->mutex);
+
+    if (item.priority == URGENT) {
+        /* Insert into urgent queue */
+        buf->urgent_slots[buf->u_tail] = item;
+        buf->u_tail = (buf->u_tail + 1) % buf->capacity;
+        buf->u_count++;
+    } else {
+        /* Insert into normal queue */
+        buf->normal_slots[buf->n_tail] = item;
+        buf->n_tail = (buf->n_tail + 1) % buf->capacity;
+        buf->n_count++;
+    }
+
+    pthread_mutex_unlock(&buf->mutex);
+    sem_post(&buf->full);
+
 }
 
 /*
@@ -131,7 +178,22 @@ static void buffer_insert(buffer_t *buf, item_t item) {
  * Always dequeues urgent items before normal ones (priority).
  */
 static item_t buffer_remove(buffer_t *buf) {
-    
+    sem_wait(&buf->full);
+    pthread_mutex_lock(&buf->mutex);
+    item_t item;
+    if (buf->u_count > 0) {
+        /* Dequeue from urgent queue */
+        item = buf->urgent_slots[buf->u_head];
+        buf->u_head = (buf->u_head + 1) % buf->capacity;
+        buf->u_count--;
+    } else {
+        /* Dequeue from normal queue */
+        item = buf->normal_slots[buf->n_head];
+        buf->n_head = (buf->n_head + 1) % buf->capacity;
+        buf->n_count--;
+    }
+    pthread_mutex_unlock(&buf->mutex);
+    return item;
 }
 
 /* ═══════════════════════════════════════════════════════════
