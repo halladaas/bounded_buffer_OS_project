@@ -1,0 +1,15 @@
+# Compiled objects and binary
+src/*.o
+producer_consumer
+
+# Build artifacts
+*.out
+*.a
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*~
+
+# Results (generated at runtime — commit only if you want snapshots)
+results/metrics.txt
