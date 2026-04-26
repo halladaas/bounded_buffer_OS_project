@@ -101,15 +101,15 @@ typedef struct {
 
 | Function | Owner | Description |
 |----------|-------|-------------|
-| `buffer_init(buf, capacity)` | Member 2 | Allocate queues, init semaphores + mutex |
-| `buffer_destroy(buf)` | Member 2 | Free memory, destroy semaphores + mutex |
-| `buffer_insert(buf, item)` | Member 2 | Block if full, insert by priority |
-| `buffer_remove(buf)` | Member 2 | Block if empty, dequeue urgent-first |
-| `producer_thread(arg)` | Member 3 | Generate 20 items, insert into buffer |
-| `consumer_thread(arg)` | Member 4 | Consume until poison pill, track metrics |
-| `print_metrics(...)` | Member 4 | Print + save latency/throughput to file |
-| `parse_args(...)` | Halla | Validate argc/argv, return parsed values |
-| `main()` | Halla | Init, spawn threads, poison pills, cleanup |
+| `buffer_init(buf, capacity)` | Halla | Allocate queues, init semaphores + mutex |
+| `buffer_destroy(buf)` | Halla | Free memory, destroy semaphores + mutex |
+| `buffer_insert(buf, item)` | Halla | Block if full, insert by priority |
+| `buffer_remove(buf)` | Halla | Block if empty, dequeue urgent-first |
+| `producer_thread(arg)` | Maaziya | Generate 20 items, insert into buffer |
+| `consumer_thread(arg)` | Rana | Consume until poison pill, track metrics |
+| `print_metrics(...)` | Rana | Print + save latency/throughput to file |
+| `parse_args(...)` | Sakina | Validate argc/argv, return parsed values |
+| `main()` | Sakina | Init, spawn threads, poison pills, cleanup |
 
 ---
 
@@ -134,10 +134,10 @@ make test-large   # 4 producers, 4 consumers, buffer 32 (bonus metrics)
 ```
 main          ← stable, final only
  └── dev      ← integration (merge here first, test, then → main)
-      ├── buffer-feature    (Member 2)
-      ├── producer-feature  (Member 3)
-      ├── consumer-feature  (Member 4)
-      └── main-feature      (Halla)
+      ├── buffer-feature    (Halla)
+      ├── producer-feature  (Maaziya)
+      ├── consumer-feature  (Rana)
+      └── main-feature      (Sakina)
 ```
 
 **Before pushing always pull from dev first:**
