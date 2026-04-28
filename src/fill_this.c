@@ -228,34 +228,37 @@ void *producer_thread(void *arg) {
 /* ═══════════════════════════════════════════════════════════
  *  CONSUMER THREAD
  * ═══════════════════════════════════════════════════════════ */
-static void *consumer(void *arg) {
-    int id = *(int *)arg;
+static void *consumer_thread(void *arg) {
+    consumer_args_t *cargs = (consumer_args_t *)arg;
+    int id = cargs->id;
+    buffer_t *buf = cargs->buf;
+
     while (1) {
-        while (sem_wait(filled_slots) == -1 && errno == EINTR);  // CHANGED
-        pthread_mutex_lock(&buf_mutex);
-        Item item = remove_item();
-        pthread_mutex_unlock(&buf_mutex);
-        // REMOVED: sem_post(empty_slots) was here
+        item_t item = buffer_remove(buf);
+
         if (item.value == POISON_PILL) {
-            printf("[Consumer-%d] Received poison pill. Exiting.\n", id);
-            // ADDED: re-queue the pill and wake next consumer
-            pthread_mutex_lock(&buf_mutex);
-            insert_item(item);
-            pthread_mutex_unlock(&buf_mutex);
-            sem_post(filled_slots);
+            printf("[Consumer-%d] got poison pill, shutting down\n", id);
             break;
         }
-        sem_post(empty_slots);  // MOVED: now after the poison pill check
-        struct timespec deq_ts;
-        clock_gettime(CLOCK_MONOTONIC, &deq_ts);
-        double latency = ts_to_sec(deq_ts) - ts_to_sec(item.enqueue_ts);
-        pthread_mutex_lock(&metrics_mutex);
-        total_latency += latency;
-        total_consumed++;
-        pthread_mutex_unlock(&metrics_mutex);
-        printf("[Consumer-%d] Consumed item: %d (priority: %s)\n",
-               id, item.value, item.priority ? "URGENT" : "normal");
+
+        struct timespec dequeue_ts;
+        clock_gettime(CLOCK_MONOTONIC, &dequeue_ts);
+        double latency = timespec_diff_ms(item.enqueue_ts, dequeue_ts);
+
+        if (item.priority == URGENT) {
+            printf("[Consumer-%d] Consumed item: %d [URGENT] (latency: %.2f ms)\n",
+                   id, item.value, latency);
+        } else {
+            printf("[Consumer-%d] Consumed item: %d (latency: %.2f ms)\n",
+                   id, item.value, latency);
+        }
+
+        pthread_mutex_lock(&g_metrics.mtx);
+        g_metrics.total_consumed++;
+        g_metrics.total_latency_ms += latency;
+        pthread_mutex_unlock(&g_metrics.mtx);
     }
+
     printf("[Consumer-%d] Finished consuming.\n", id);
     return NULL;
 }
