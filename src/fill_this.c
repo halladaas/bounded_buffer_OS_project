@@ -193,29 +193,98 @@ static item_t buffer_remove(buffer_t *buf) {
         buf->n_count--;
     }
     pthread_mutex_unlock(&buf->mutex);
+    sem_post(&buf->empty);
     return item;
 }
 
 /* ═══════════════════════════════════════════════════════════
  *  PRODUCER THREAD
  * ═══════════════════════════════════════════════════════════ */
-static void *producer_thread(void *arg) {
- 
+void *producer_thread(void *arg) {
+    producer_args_t *args = (producer_args_t *)arg;
+    int id = args->id;
+    buffer_t *buf = args->buf;
+
+    srand(time(NULL) ^ (id * 1000));
+
+    for (int i = 0; i < ITEMS_PER_PRODUCER; i++) {
+        item_t item;
+        item.value = rand() % 100;
+        item.priority = (rand() % 4 == 0) ? 1 : 0;
+        clock_gettime(CLOCK_MONOTONIC, &item.enqueue_ts);
+
+        buffer_insert(args->buf, item);
+
+        printf("[Producer-%d] Produced item: %d%s\n",
+               id,
+               item.value,
+               item.priority ? " [URGENT]" : "");
+    }
+
+    printf("[Producer-%d] Finished producing %d items.\n", id, ITEMS_PER_PRODUCER);
+    return NULL;
 }
 
 /* ═══════════════════════════════════════════════════════════
  *  CONSUMER THREAD
  * ═══════════════════════════════════════════════════════════ */
 static void *consumer_thread(void *arg) {
+    consumer_args_t *cargs = (consumer_args_t *)arg;
+    int id = cargs->id;
+    buffer_t *buf = cargs->buf;
 
+    while (1) {
+        item_t item = buffer_remove(buf);
+
+        if (item.value == POISON_PILL) {
+            printf("[Consumer-%d] got poison pill, shutting down\n", id);
+            break;
+        }
+
+        struct timespec dequeue_ts;
+        clock_gettime(CLOCK_MONOTONIC, &dequeue_ts);
+        double latency = timespec_diff_ms(item.enqueue_ts, dequeue_ts);
+
+        if (item.priority == URGENT) {
+            printf("[Consumer-%d] Consumed item: %d [URGENT] (latency: %.2f ms)\n",
+                   id, item.value, latency);
+        } else {
+            printf("[Consumer-%d] Consumed item: %d (latency: %.2f ms)\n",
+                   id, item.value, latency);
+        }
+
+        pthread_mutex_lock(&g_metrics.mtx);
+        g_metrics.total_consumed++;
+        g_metrics.total_latency_ms += latency;
+        pthread_mutex_unlock(&g_metrics.mtx);
+    }
+
+    printf("[Consumer-%d] Finished consuming.\n", id);
+    return NULL;
 }
 
 /* ═══════════════════════════════════════════════════════════
  *  INPUT VALIDATION
  * ═══════════════════════════════════════════════════════════ */
 static int parse_args(int argc, char *argv[],
-                      int *num_prod, int *num_cons, int *buf_size) {
+                      int *num_of_prod, int *num_of_cons, int *size_of_buffer) {
 
+    if (argc != 4) {
+            fprintf(stderr,
+                "Usage: %s <num_producers> <num_consumers> <buffer_size>\n"
+                "Example: %s 3 2 10\n", argv[0], argv[0]);
+            return -1;
+        }
+
+    *num_of_prod = atoi(argv[1]);
+    *num_of_cons = atoi(argv[2]);
+    *size_of_buffer = atoi(argv[3]);
+
+    if (*num_of_prod <= 0 || *num_of_cons <= 0 || *size_of_buffer <= 0) {
+        fprintf(stderr, "Error: all arguments must be positive integers\n");
+        return -1;
+    }
+    return 0;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -263,4 +332,97 @@ static void print_metrics(int num_prod, int num_cons, int buf_size) {
  * ═══════════════════════════════════════════════════════════ */
 int main(int argc, char *argv[]) {
    
+    int num_prod, num_cons, buff_size;
+    if (parse_args(argc, argv, &num_prod, &num_cons, &buff_size) != 0){ 
+        return EXIT_FAILURE;
+    }
+
+    printf("=== Producer-Consumer ===\n");
+    printf("Producers: %d | Consumers: %d | Buffer: %d slots\n\n",
+           num_prod, num_cons, buff_size);
+
+    /* ── metric initialization ── */
+    memset(&g_metrics, 0, sizeof(g_metrics));
+    pthread_mutex_init(&g_metrics.mtx, NULL);
+    clock_gettime(CLOCK_MONOTONIC, &g_metrics.run_start);
+
+    /* ── shared buffer ── */
+    buffer_t buf;
+    if (buffer_init(&buf, buff_size) != 0){ 
+        fprintf(stderr, "Error: Buffer initialization failed.\n");
+        return EXIT_FAILURE;
+    }
+
+    /* ── thread handles & args allocation── */
+    pthread_t       *prod_threads = malloc(num_prod * sizeof(pthread_t));
+    pthread_t       *cons_threads = malloc(num_cons * sizeof(pthread_t));
+    producer_args_t *pargs        = malloc(num_prod * sizeof(producer_args_t));
+    consumer_args_t *cargs        = malloc(num_cons * sizeof(consumer_args_t));
+
+    if (!prod_threads || !cons_threads || !pargs || !cargs) {
+        fprintf(stderr, "Error: memory allocation failed\n");
+        return EXIT_FAILURE;
+    }
+
+    /* ── creating producer threads first ── */
+    for (int i = 0; i < num_prod; i++) {
+        pargs[i].id           = i;
+        pargs[i].buf          = &buf;
+        pargs[i].num_consumers = num_cons;
+        if (pthread_create(&prod_threads[i], NULL, producer_thread, &pargs[i]) != 0) {
+            fprintf(stderr, "Error: failed to create producer thread %d: %s\n",
+                    i, strerror(errno));
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* ── creating consumer threads ── */
+    for (int i = 0; i < num_cons; i++) {
+        cargs[i].id  = i;
+        cargs[i].buf = &buf;
+        if (pthread_create(&cons_threads[i], NULL, consumer_thread, &cargs[i]) != 0) {
+            fprintf(stderr, "Error: failed to create consumer thread %d: %s\n",
+                    i , strerror(errno));
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* ── waiting for all producers to finish ── */
+    for (int i = 0; i < num_prod; i++){
+        pthread_join(prod_threads[i], NULL);
+    }
+
+    /* Update metrics for produced items */
+    pthread_mutex_lock(&g_metrics.mtx);
+    g_metrics.total_produced = num_prod * ITEMS_PER_PRODUCER;
+    pthread_mutex_unlock(&g_metrics.mtx);
+
+    printf("\n[Main] All producers done. Sending poison pills...\n");
+
+    /* ── sending one poison pill per consumer ── */
+    for (int i = 0; i < num_cons; i++) {
+        item_t pill;
+        pill.value    = POISON_PILL;
+        pill.priority = NORMAL;        /* pills go through normal queue */
+        clock_gettime(CLOCK_MONOTONIC, &pill.enqueue_ts);
+        buffer_insert(&buf, pill);
+    }
+
+    /* ── waiting for all consumers to finish ── */
+    for (int i = 0; i < num_cons; i++)
+        pthread_join(cons_threads[i], NULL);
+
+    /* ── final metrics ── */
+    clock_gettime(CLOCK_MONOTONIC, &g_metrics.run_end);
+    print_metrics(num_prod, num_cons, buff_size);
+
+    /* ── cleanup ── */
+    buffer_destroy(&buf);
+    pthread_mutex_destroy(&g_metrics.mtx);
+    free(prod_threads);
+    free(cons_threads);
+    free(pargs);
+    free(cargs);
+
+    return EXIT_SUCCESS;
 }
