@@ -3,14 +3,14 @@
 
 ---
 
-## Team Members & Responsibilities
+## Team Contribution
 
-| Member | Branch | Owns |
-|--------|--------|------|
-| Sakina | `main-feature` | `main()`, input validation, poison pill, thread spawning/joining |
-| Halla | `buffer-feature` | `buffer_init`, `buffer_destroy`, `buffer_insert`, `buffer_remove` |
-| Maaziya | `producer-feature` | `producer_thread` |
-| Rana | `consumer-feature` | `consumer_thread`, `print_metrics` |
+| Member | Owns |
+|--------|------|
+| Sakina | `main()`, input validation, poison pill, thread spawning/joining |
+| Halla  | `buffer_init`, `buffer_destroy`, `buffer_insert`, `buffer_remove` |
+| Maaziya| `producer_thread`
+| Rana   | `consumer_thread`, `print_metrics`
 
 ---
 
@@ -39,8 +39,8 @@ Buffer (capacity = N per queue):
 |-----------|----------|---------|
 | Semaphore | `empty` | Counts free slots — producers block here when buffer is full |
 | Semaphore | `full` | Counts filled slots — consumers block here when buffer is empty |
-| Mutex | `mutex` | Protects `head`, `tail`, `count` during insert/remove |
-| Mutex | `metrics.mtx` | Protects shared metrics counters across consumer threads |
+| Mutex     | `mutex` | Protects `head`, `tail`, `count` during insert/remove |
+| Mutex     | `metrics.mtx` | Protects shared metrics counters across consumer threads |
 
 **Rule:** No busy-waiting. No `sleep()` for synchronisation. Only semaphores and mutexes block threads.
 
@@ -145,23 +145,3 @@ main          ← stable, final only
 git pull origin dev
 ```
 
----
-
-## Challenges & Notes
-*(fill in as you go)*
-
-- 
-- 
-- 
-
----
-
-## Individual Contributions
-*(fill in before submission)*
-
-| Member | Contribution |
-|--------|-------------|
-| Halla | |
-| [Name 2] | |
-| [Name 3] | |
-| [Name 4] | |
